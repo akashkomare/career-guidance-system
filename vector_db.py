@@ -137,6 +137,12 @@ class CareerVectorDB:
     def advanced_search(self, user_profile: Dict, riasec_code: str, n_results: int = 5) -> List[Dict]:
         """Perform advanced search with improved matching"""
         
+        # Add debugging to identify the exact None value
+        print(f"🔍 Debug user_profile: {user_profile}")
+        print(f"🔍 Debug user_profile fields:")
+        for key, value in user_profile.items():
+            print(f"   {key}: {value} (type: {type(value)})")
+        
         # Build comprehensive query
         query_parts = [
             f"Career for {user_profile['occupation']}",
@@ -145,13 +151,15 @@ class CareerVectorDB:
             f"Skills and job preferences matching personality and background"
         ]
         
-        if user_profile.get('current_field'):
-            query_parts.append(f"Field: {user_profile['current_field']}")
+        # Safely handle current_field which might be None
+        current_field = user_profile.get('current_field')
+        if current_field:
+            query_parts.append(f"Field: {current_field}")
         
         query = ". ".join(query_parts)
         
         # Perform semantic search with more results
-        all_results = self.semantic_search(query=query, n_results=50)  # Increased from 20 to 50
+        all_results = self.semantic_search(query=query, n_results=50)
         
         if not all_results:
             logger.warning("❌ No semantic results found")
@@ -160,17 +168,21 @@ class CareerVectorDB:
         # Calculate match percentages with multiple parameters
         scored_results = []
         for result in all_results:
-            match_percentage, matching_params = self._calculate_advanced_match(
-                result, user_profile, riasec_code
-            )
-            
-            # Lower the threshold to get more results
-            if match_percentage >= 60:  # Reduced from 70 to 60
-                result['match_percentage'] = match_percentage
-                result['matching_parameters'] = matching_params
-                result['automation_risk'] = self._extract_automation_risk(result.get('automation_risk_assessment', ''))
-                result['geographic_demand'] = result.get('geographic_demand_hotspots', '')
-                scored_results.append(result)
+            try:
+                match_percentage, matching_params = self._calculate_advanced_match(
+                    result, user_profile, riasec_code
+                )
+                
+                # Lower the threshold to get more results
+                if match_percentage >= 60:
+                    result['match_percentage'] = match_percentage
+                    result['matching_parameters'] = matching_params
+                    result['automation_risk'] = self._extract_automation_risk(result.get('automation_risk_assessment', ''))
+                    result['geographic_demand'] = result.get('geographic_demand_hotspots', '')
+                    scored_results.append(result)
+            except Exception as e:
+                print(f"❌ Error processing career result: {e}")
+                continue
         
         # Sort by match percentage and get top results
         scored_results.sort(key=lambda x: x['match_percentage'], reverse=True)
@@ -180,18 +192,19 @@ class CareerVectorDB:
         
         return final_results
 
+
     def _calculate_advanced_match(self, career: Dict, user_profile: Dict, user_riasec: str) -> tuple:
         """Calculate advanced match percentage with improved RIASEC matching for 3 codes"""
         total_score = 0
         max_possible_score = 0
         matching_parameters = []
         
-        # 1. RIASEC Code Match (50% weight) - IMPROVED for 3-character codes
+        # 1. RIASEC Code Match (50% weight)
         riasec_weight = 50
-        career_riasec = career.get('riasec_code', '').replace(' ', '')[:3]  # Get up to 3 chars
-        user_riasec_clean = user_riasec.replace(' ', '')[:3]  # Get up to 3 chars
+        career_riasec = career.get('riasec_code', '') or ''
+        career_riasec = str(career_riasec).replace(' ', '')[:3]
+        user_riasec_clean = str(user_riasec).replace(' ', '')[:3]
         
-        # Calculate RIASEC similarity with multiple matching strategies
         riasec_score = self._calculate_riasec_similarity_advanced(user_riasec_clean, career_riasec)
         
         if riasec_score >= 90:
@@ -206,8 +219,10 @@ class CareerVectorDB:
         
         # 2. Education Level Match (20% weight)
         education_weight = 20
-        user_education = user_profile.get('education_level', '').lower()
-        career_education_context = career.get('learning_pathway_recommendations', '').lower()
+        user_education = user_profile.get('education_level', '') or ''
+        user_education = str(user_education).lower()
+        career_education_context = career.get('learning_pathway_recommendations', '') or ''
+        career_education_context = str(career_education_context).lower()
         
         education_score = self._calculate_education_match(user_education, career_education_context)
         if education_score >= 80:
@@ -220,7 +235,7 @@ class CareerVectorDB:
         
         # 3. Experience Match (15% weight)
         experience_weight = 15
-        user_experience = user_profile.get('experience_years', 0)
+        user_experience = user_profile.get('experience_years', 0) or 0
         experience_score = self._calculate_experience_match(user_experience, career)
         if experience_score >= 80:
             matching_parameters.append(f"Experience Level: Good match")
@@ -230,8 +245,10 @@ class CareerVectorDB:
         
         # 4. Field/Industry Match (10% weight)
         field_weight = 10
-        user_field = user_profile.get('current_field', '').lower()
-        career_domain = career.get('family_title', '').lower() + ' ' + career.get('nco_title', '').lower()
+        user_field = user_profile.get('current_field', '') or ''
+        user_field = str(user_field).lower()
+        career_domain = (career.get('family_title', '') or '') + ' ' + (career.get('nco_title', '') or '')
+        career_domain = str(career_domain).lower()
         
         field_score = self._calculate_field_match(user_field, career_domain)
         if field_score >= 80:
@@ -244,13 +261,13 @@ class CareerVectorDB:
         
         # 5. Market Demand Bonus (5% weight)
         demand_weight = 5
-        market_demand = career.get('market_demand_score', 0)
+        market_demand = career.get('market_demand_score', 0) or 0
         if isinstance(market_demand, (int, float)):
-            demand_score = min(market_demand * 20, 100)  # More generous scoring
+            demand_score = min(market_demand * 20, 100)
             if demand_score > 70:
                 matching_parameters.append(f"Market Demand: High")
         else:
-            demand_score = 70  # Default to good score if unknown
+            demand_score = 70
         
         total_score += demand_score * (demand_weight / 100)
         max_possible_score += demand_weight
@@ -263,12 +280,12 @@ class CareerVectorDB:
         
         # Apply RIASEC boost for high matches
         if riasec_score >= 80:
-            final_percentage = min(final_percentage * 1.2, 100)  # 20% boost for high RIASEC matches
+            final_percentage = min(final_percentage * 1.2, 100)
         
-        # Round to nearest integer
         final_percentage = round(final_percentage)
         
         return min(final_percentage, 100), matching_parameters
+
 
     def _calculate_riasec_similarity_advanced(self, user_riasec: str, career_riasec: str) -> float:
         """Calculate RIASEC similarity with chronological order priority"""
@@ -326,6 +343,13 @@ class CareerVectorDB:
 
     def _calculate_education_match(self, user_education: str, career_education_context: str) -> float:
         """Calculate education level match"""
+        # Handle None values
+        if not user_education or user_education is None:
+            return 70  # Default score if no education specified
+        
+        user_education = str(user_education).lower()
+        career_education_context = str(career_education_context).lower()
+        
         education_keywords = {
             'high school': ['school', 'high school', 'secondary', 'basic'],
             'diploma': ['diploma', 'certificate', 'vocational'],
@@ -342,6 +366,7 @@ class CareerVectorDB:
                     return 60  # Partial match for same level but different terms
         
         return 70  # Default good score if no specific match
+
 
     def _calculate_experience_match(self, user_experience: int, career: Dict) -> float:
         """Calculate experience level match"""
@@ -372,20 +397,63 @@ class CareerVectorDB:
 
     def _calculate_field_match(self, user_field: str, career_domain: str) -> float:
         """Calculate field/industry match"""
-        if not user_field:
+        # Handle None or empty user_field safely
+        if not user_field or user_field is None or user_field == 'none':
             return 80  # Good score if no specific field preference
         
-        if user_field in career_domain:
-            return 100
-        
-        # Check for related fields
-        related_fields = self._get_related_fields(user_field)
-        if any(field in career_domain for field in related_fields):
-            return 85
-        
-        return 50  # Partial match for unrelated fields
+        try:
+            user_field = str(user_field).lower() if user_field else ''
+            career_domain = str(career_domain).lower() if career_domain else ''
+            
+            if user_field and user_field in career_domain:
+                return 100
+            
+            # Check for related fields
+            related_fields = self._get_related_fields(user_field)
+            if any(field in career_domain for field in related_fields):
+                return 85
+            
+            return 50  # Partial match for unrelated fields
+        except Exception as e:
+            print(f"❌ Error in _calculate_field_match: {e}")
+            return 70  # Default score on error
+
+        def _calculate_education_match(self, user_education: str, career_education_context: str) -> float:
+            """Calculate education level match"""
+            # Handle None values safely
+            if not user_education or user_education is None or user_education == 'none':
+                return 70  # Default score if no education specified
+            
+            try:
+                user_education = str(user_education).lower() if user_education else ''
+                career_education_context = str(career_education_context).lower() if career_education_context else ''
+                
+                education_keywords = {
+                    'high school': ['school', 'high school', 'secondary', 'basic'],
+                    'diploma': ['diploma', 'certificate', 'vocational'],
+                    'bachelor': ['bachelor', 'undergraduate', 'degree', 'college'],
+                    'master': ['master', 'postgraduate', 'graduate'],
+                    'phd': ['phd', 'doctorate', 'doctoral']
+                }
+                
+                for level, keywords in education_keywords.items():
+                    if level in user_education:
+                        if any(keyword in career_education_context for keyword in keywords):
+                            return 100
+                        else:
+                            return 60  # Partial match for same level but different terms
+                
+                return 70  # Default good score if no specific match
+            except Exception as e:
+                print(f"❌ Error in _calculate_education_match: {e}")
+                return 70  # Default score on error
+
     def _get_related_fields(self, field: str) -> List[str]:
         """Get related fields for flexible matching"""
+        # Handle None field
+        if not field or field is None:
+            return []
+        
         field_relations = {
             'technology': ['it', 'software', 'computer', 'tech', 'digital'],
             'healthcare': ['medical', 'health', 'hospital', 'clinical'],
@@ -394,12 +462,13 @@ class CareerVectorDB:
             'engineering': ['technical', 'manufacturing', 'construction']
         }
         
+        field = str(field).lower()
+        
         for main_field, related in field_relations.items():
             if field in main_field or any(rel in field for rel in related):
                 return related + [main_field]
         
         return [field]
-    
     def _extract_automation_risk(self, risk_str: str) -> str:
         """Extract automation risk from assessment string"""
         if not risk_str or pd.isna(risk_str):
